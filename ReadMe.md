@@ -1,1 +1,2 @@
-Fiji GUI for YeastMate.
+# FijiYeastMate
+Fiji GUI for YeastMate
