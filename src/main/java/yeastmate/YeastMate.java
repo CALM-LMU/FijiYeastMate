@@ -6,11 +6,18 @@ import java.io.BufferedOutputStream;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.FileWriter;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.charset.Charset;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.HashSet;
@@ -22,14 +29,22 @@ import javax.imageio.ImageIO;
 
 import org.apache.commons.math3.stat.descriptive.rank.Percentile;
 import org.apache.http.HttpEntity;
+import org.apache.http.ProtocolVersion;
+import org.apache.http.client.methods.CloseableHttpResponse;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.client.methods.RequestBuilder;
 import org.apache.http.entity.ContentType;
 import org.apache.http.entity.mime.HttpMultipartMode;
 import org.apache.http.entity.mime.MultipartEntityBuilder;
+import org.apache.http.entity.mime.content.ByteArrayBody;
+import org.apache.http.entity.mime.content.FileBody;
 import org.apache.http.impl.client.HttpClients;
+import org.apache.http.protocol.HttpRequestExecutor;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.json.JSONTokener;
+import org.json.JSONWriter;
 import org.scijava.app.StatusService;
 import org.scijava.command.Command;
 import org.scijava.command.Previewable;
@@ -156,10 +171,6 @@ public class YeastMate implements Command, Previewable {
 
 	public <T extends RealType<T>> void detect() {
 
-		// get old intensity display range -> we will rescale intensity during detection
-//		final double oldMin = image.getDisplayRangeMin();
-//		final double oldMax = image.getDisplayRangeMax();
-
 		// get only currently displayed image as imglib2 RAI
 		RandomAccessibleInterval<T> img = ImageJFunctions.wrapReal( image );
 		if (image.getNChannels() > 1)
@@ -177,10 +188,7 @@ public class YeastMate implements Command, Previewable {
 		final double minPerc = minNormalizationQualtile == 0.0 ? image.getProcessor().getMin() : percentileCalculator.evaluate( pixels, minNormalizationQualtile * 100 );
 		final double maxPerc = percentileCalculator.evaluate( pixels, maxNormalizationQualtile * 100 );
 
-//		System.out.println( minPerc );
-//		System.out.println( maxPerc );
-
-		// make quantile-normalized version of img
+		// make quantile-normalized copy of img
 		RandomAccessibleInterval< FloatType > normalizedImg = ArrayImgs.floats( img.dimensionsAsLongArray() );
 		RandomAccess< FloatType > raNormalized = normalizedImg.randomAccess();
 		Cursor< T > cursorSource = Views.iterable( img ).cursor();
@@ -193,55 +201,43 @@ public class YeastMate implements Command, Previewable {
 			raNormalized.get().set( x );
 		}
 		ImagePlus normalizedIP = ImageJFunctions.wrap( normalizedImg, "normalized " + image.getTitle());
-//		normalizedIP.show();
-		
-		// set display range to quantiles as we send the AWT Image to detector
-//		image.setDisplayRange( minPerc, maxPerc );
-//		image.updateAndDraw();
-
-//		new ImagePlus( "tmp", null ;
-
-//		BufferedImage buff = image.getBufferedImage();
-
-//		System.out.println( buff.getColorModel() );
-//		System.out.println( buff.getSampleModel() );
 
 		try{
-			URL url = new URL("http://" + ipAdress + "/predict");
-			HttpURLConnection conn = (HttpURLConnection) url.openConnection();
 
-			conn.setDoOutput(true);
-			conn.setRequestMethod("POST");
-			conn.setRequestProperty( "Content-Type", IMAGE_REQUEST_TYPE );
-
-
-//			Arrays.asList( ImageIO.getReaderFormatNames() ).forEach( System.out::println );
-			
 			ByteArrayOutputStream imageBytes = new ByteArrayOutputStream();
-//			new TiffEncoder( normalizedIP.getFileInfo() ).write( conn.getOutputStream() );
+			ByteArrayOutputStream jsonBytes = new ByteArrayOutputStream();
+
+			// write parameters as JSON bytes
+			// TODO: set actual parameters here
+			PrintWriter pw = new PrintWriter(jsonBytes);
+			pw.write("{\"0\":0.9,\"1\":0.5,\"2\":0.5}");
+			pw.close();
+
+			// write normalized image as tiff to bytes
 			new TiffEncoder( normalizedIP.getFileInfo() ).write( imageBytes );
+
+			// build multipart request as BentoML AnnotatedImage input spec
 			MultipartEntityBuilder multipartBuilder = MultipartEntityBuilder.create();
-			multipartBuilder.seContentType( ContentType.MULTIPART_FORM_DATA );
-			multipartBuilder.addBinaryBody( "image", new ByteArrayInputStream( imageBytes.toByteArray() ) );
-			multipartBuilder.addTextBody( "annotations", "{0:0.9,1:0.5,2:0.5}" );
-			multipartBuilder.build().writeTo( conn.getOutputStream() );
+			multipartBuilder.setContentType(ContentType.MULTIPART_FORM_DATA);
+			multipartBuilder.setBoundary("TEHBOUNDARY");
+			multipartBuilder.addBinaryBody("image", imageBytes.toByteArray(), ContentType.IMAGE_TIFF, "image.tiff");
+			multipartBuilder.addBinaryBody( "annotations", jsonBytes.toByteArray(), ContentType.APPLICATION_JSON, "annotations.json");
 
-//			ImageIO.write( buff, "png", conn.getOutputStream() );
-			InputStream is = conn.getInputStream();
+			HttpPost conn = new HttpPost("http://" + ipAdress + "/predict");
+			conn.setEntity(multipartBuilder.build());
 
-			JSONTokener tokener = new JSONTokener(new InputStreamReader(is));
+			// get response as JSON
+			CloseableHttpResponse response = HttpClients.createDefault().execute(conn);
+			JSONTokener tokener = new JSONTokener(response.getEntity().getContent());
 			JSONObject result = new JSONObject(tokener);
 
-
-			
-			is.close();
-			conn.disconnect();
+			response.close();
 
 			RoiManager manager = RoiManager.getInstance();
 			if (manager == null){
 				manager = new RoiManager();
 			}
-			
+
 			// NB: does not work because ImageIO can't read tiff (pre java 9)
 //			BufferedImage base64toBufferedImg = base64toBufferedImg( result.getString( "mask" ) );
 //			ImagePlus maaaaa = new ImagePlus("Temporary mask", base64toBufferedImg);
@@ -257,8 +253,6 @@ public class YeastMate implements Command, Previewable {
 						);
 			}
 
-//			ArrayImg< ShortType, ShortArray > masks = ArrayImgs.shorts( img.dimensionsAsLongArray() );
-			
 			final JSONObject thingsJSON = result.getJSONObject( "things" );
 
 			final HashSet< Integer > objectsOverThreshold = new HashSet<>();
@@ -280,7 +274,8 @@ public class YeastMate implements Command, Previewable {
 
 					String objectClassCode = (thing.getString( "class" ));
 					String objectClass = "";
-					
+
+					// TODO: extract
 					if (objectClassCode.equals( "0" ))
 						objectClass = "single_cell";
 					else if (objectClassCode.equals( "1" ))
@@ -314,6 +309,7 @@ public class YeastMate implements Command, Previewable {
 						v.setZero();
 				});
 
+				// TODO: extract
 				if (lutService.findLUTs().containsKey( LABEL_LUT_NAME ))
 				{
 					ColorTable lutColorTable = lutService.loadLUT( lutService.findLUTs().get( LABEL_LUT_NAME ) );
@@ -396,11 +392,6 @@ public class YeastMate implements Command, Previewable {
 		catch(JSONException c) {
 			log.info(c);
 		}
-//		finally {
-//			// set display range to old min and max
-//			image.setDisplayRange( oldMin, oldMax );
-//			image.updateAndDraw();
-//		}
 	}
 
 	@Override
