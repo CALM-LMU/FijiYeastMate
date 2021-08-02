@@ -1,19 +1,31 @@
 package yeastmate;
 
 import java.awt.image.BufferedImage;
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.Arrays;
 import java.util.Base64;
+import java.util.HashSet;
 import java.util.Iterator;
+import java.util.Map;
 import java.util.stream.StreamSupport;
 
 import javax.imageio.ImageIO;
 
 import org.apache.commons.math3.stat.descriptive.rank.Percentile;
+import org.apache.http.HttpEntity;
+import org.apache.http.entity.ContentType;
+import org.apache.http.entity.mime.HttpMultipartMode;
+import org.apache.http.entity.mime.MultipartEntityBuilder;
+import org.apache.http.impl.client.HttpClients;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -21,19 +33,37 @@ import org.json.JSONTokener;
 import org.scijava.app.StatusService;
 import org.scijava.command.Command;
 import org.scijava.command.Previewable;
+import org.scijava.io.IOService;
 import org.scijava.log.LogService;
 import org.scijava.plugin.Parameter;
 import org.scijava.plugin.Plugin;
 
+import ij.IJ;
 import ij.ImagePlus;
 import ij.gui.Roi;
+import ij.io.FileInfo;
+import ij.io.Opener;
+import ij.io.TiffEncoder;
+import ij.plugin.BMP_Writer;
+import ij.plugin.LutLoader;
 import ij.plugin.filter.ThresholdToSelection;
 import ij.plugin.frame.RoiManager;
 import ij.process.ImageProcessor;
+import ij.process.LUT;
+import io.scif.formats.tiff.TiffSaver;
+import io.scif.media.imageioimpl.plugins.tiff.TIFFImageWriter;
+import io.scif.services.JAIIIOService;
+import io.scif.services.JAIIIOServiceImpl;
 import net.imagej.ImageJ;
+import net.imagej.lut.LUTFinder;
+import net.imagej.lut.LUTService;
 import net.imglib2.Cursor;
 import net.imglib2.RandomAccess;
 import net.imglib2.RandomAccessibleInterval;
+import net.imglib2.algorithm.stats.Normalize;
+import net.imglib2.converter.Converters;
+import net.imglib2.converter.RealFloatConverter;
+import net.imglib2.display.ColorTable;
 import net.imglib2.img.Img;
 import net.imglib2.img.array.ArrayImg;
 import net.imglib2.img.array.ArrayImgs;
@@ -43,12 +73,15 @@ import net.imglib2.img.display.imagej.ImageJFunctions;
 import net.imglib2.type.numeric.RealType;
 import net.imglib2.type.numeric.integer.ShortType;
 import net.imglib2.type.numeric.integer.UnsignedByteType;
+import net.imglib2.type.numeric.real.FloatType;
 import net.imglib2.util.Util;
 import net.imglib2.view.Views;
 
 @Plugin(type = Command.class, headless = true,
 	menuPath = "Plugins>YeastMate")
 public class YeastMate implements Command, Previewable {
+	private static final String LABEL_LUT_NAME = "Fire.lut";
+
 	private String tmpIpAdress = "*:5000";
 
 	@Parameter
@@ -56,6 +89,12 @@ public class YeastMate implements Command, Previewable {
 
 	@Parameter
 	private StatusService statusService;
+	
+	@Parameter
+	private IOService ioService;
+	
+	@Parameter
+	private LUTService lutService;
 
 	@Parameter(label = "Local or remote detection", choices = { "Local detection", "Remote detection" }, callback="localChanged")
 	private String localChoice;
@@ -75,7 +114,7 @@ public class YeastMate implements Command, Previewable {
 	@Parameter(label = "Detection score threshold to add objects", style = "slider", min = "0", max = "1", stepSize = "0.1")
 	private Double scoreThreshold = 0.5;
 
-@	Parameter(label = "Minimum Intensity Quantile for Normalization", style = "slider", min = "0.001", max = "1", stepSize = "0.001")
+	@Parameter(label = "Minimum Intensity Quantile for Normalization", style = "slider", min = "0.001", max = "1", stepSize = "0.001")
 	private Double minNormalizationQualtile = 0.01;
 
 	@Parameter(label = "Maximum Intensity Quantile for Normalization", style = "slider", min = "0", max = "1", stepSize = "0.001")
@@ -84,8 +123,18 @@ public class YeastMate implements Command, Previewable {
 	@Parameter
 	private ImagePlus image;
 
+	private static final String IMAGE_REQUEST_TYPE = "image/tiff";
+
 	@Override
 	public void run() {
+
+		// RGB would require different quantile calc -> we do not support it atm.
+		if ( image.getFileInfo().fileType == FileInfo.RGB )
+		{
+			log.log( 0, "RGB images not supported, please convert your image to grayscale." );
+			return;
+		}
+
 		detect();
 	}
 
@@ -107,6 +156,9 @@ public class YeastMate implements Command, Previewable {
 
 	public <T extends RealType<T>> void detect() {
 
+		// get old intensity display range -> we will rescale intensity during detection
+//		final double oldMin = image.getDisplayRangeMin();
+//		final double oldMax = image.getDisplayRangeMax();
 
 		// get only currently displayed image as imglib2 RAI
 		RandomAccessibleInterval<T> img = ImageJFunctions.wrapReal( image );
@@ -125,29 +177,63 @@ public class YeastMate implements Command, Previewable {
 		final double minPerc = minNormalizationQualtile == 0.0 ? image.getProcessor().getMin() : percentileCalculator.evaluate( pixels, minNormalizationQualtile * 100 );
 		final double maxPerc = percentileCalculator.evaluate( pixels, maxNormalizationQualtile * 100 );
 
+//		System.out.println( minPerc );
+//		System.out.println( maxPerc );
+
+		// make quantile-normalized version of img
+		RandomAccessibleInterval< FloatType > normalizedImg = ArrayImgs.floats( img.dimensionsAsLongArray() );
+		RandomAccess< FloatType > raNormalized = normalizedImg.randomAccess();
+		Cursor< T > cursorSource = Views.iterable( img ).cursor();
+		while(cursorSource.hasNext())
+		{
+			cursorSource.fwd();
+			raNormalized.setPosition( cursorSource );
+			float x = (float) ( (cursorSource.get().getRealFloat() - minPerc) / (maxPerc-minPerc) );
+			// TODO: clip to 0-1?
+			raNormalized.get().set( x );
+		}
+		ImagePlus normalizedIP = ImageJFunctions.wrap( normalizedImg, "normalized " + image.getTitle());
+//		normalizedIP.show();
+		
 		// set display range to quantiles as we send the AWT Image to detector
-		image.setDisplayRange( minPerc, maxPerc );
-		image.updateAndDraw();
+//		image.setDisplayRange( minPerc, maxPerc );
+//		image.updateAndDraw();
 
-		// TODO: reset display range afterwards?
+//		new ImagePlus( "tmp", null ;
 
-		BufferedImage buff = image.getBufferedImage();
-		String type = "image/png";
+//		BufferedImage buff = image.getBufferedImage();
+
+//		System.out.println( buff.getColorModel() );
+//		System.out.println( buff.getSampleModel() );
 
 		try{
-			URL url = new URL("http://" + ipAdress + "/predict_fiji");
+			URL url = new URL("http://" + ipAdress + "/predict");
 			HttpURLConnection conn = (HttpURLConnection) url.openConnection();
 
 			conn.setDoOutput(true);
 			conn.setRequestMethod("POST");
-			conn.setRequestProperty( "Content-Type", type );
+			conn.setRequestProperty( "Content-Type", IMAGE_REQUEST_TYPE );
 
-			ImageIO.write( buff, "png", conn.getOutputStream() );
+
+//			Arrays.asList( ImageIO.getReaderFormatNames() ).forEach( System.out::println );
+			
+			ByteArrayOutputStream imageBytes = new ByteArrayOutputStream();
+//			new TiffEncoder( normalizedIP.getFileInfo() ).write( conn.getOutputStream() );
+			new TiffEncoder( normalizedIP.getFileInfo() ).write( imageBytes );
+			MultipartEntityBuilder multipartBuilder = MultipartEntityBuilder.create();
+			multipartBuilder.seContentType( ContentType.MULTIPART_FORM_DATA );
+			multipartBuilder.addBinaryBody( "image", new ByteArrayInputStream( imageBytes.toByteArray() ) );
+			multipartBuilder.addTextBody( "annotations", "{0:0.9,1:0.5,2:0.5}" );
+			multipartBuilder.build().writeTo( conn.getOutputStream() );
+
+//			ImageIO.write( buff, "png", conn.getOutputStream() );
 			InputStream is = conn.getInputStream();
 
 			JSONTokener tokener = new JSONTokener(new InputStreamReader(is));
 			JSONObject result = new JSONObject(tokener);
 
+
+			
 			is.close();
 			conn.disconnect();
 
@@ -155,15 +241,36 @@ public class YeastMate implements Command, Previewable {
 			if (manager == null){
 				manager = new RoiManager();
 			}
+			
+			// NB: does not work because ImageIO can't read tiff (pre java 9)
+//			BufferedImage base64toBufferedImg = base64toBufferedImg( result.getString( "mask" ) );
+//			ImagePlus maaaaa = new ImagePlus("Temporary mask", base64toBufferedImg);
+//			maaaaa.show();
+			
+			ImagePlus mask = null;
+			if (showSegmentation)
+			{
+				// mask is returned as base64-encoded 16-bit TIFF
+				mask = new Opener().openTiff( 
+						new ByteArrayInputStream( Base64.getDecoder().decode( result.getString( "mask" ) ) ),
+						"segmentation of " + image.getTitle() 
+						);
+			}
 
-			ArrayImg< ShortType, ShortArray > masks = ArrayImgs.shorts( img.dimensionsAsLongArray() );
+//			ArrayImg< ShortType, ShortArray > masks = ArrayImgs.shorts( img.dimensionsAsLongArray() );
+			
+			final JSONObject thingsJSON = result.getJSONObject( "things" );
 
-			for (int i = 0; i < result.getJSONArray("things").length(); i++) {
-				JSONObject thing = result.getJSONArray("things").getJSONObject(i);
-
+			final HashSet< Integer > objectsOverThreshold = new HashSet<>();
+			for (final String key : thingsJSON.keySet())
+			{
+				JSONObject thing = thingsJSON.getJSONObject( key );
 				double score = thing.getDouble("score");
-
+				
 				if (score > scoreThreshold) {
+
+					objectsOverThreshold.add( Integer.parseInt( key ) );
+
 					JSONArray box = thing.getJSONArray("box");
 
 					int x = box.getInt(0);
@@ -171,42 +278,116 @@ public class YeastMate implements Command, Previewable {
 					int w = box.getInt(2) - box.getInt(0);
 					int h = box.getInt(3) - box.getInt(1);
 
+					String objectClassCode = (thing.getString( "class" ));
+					String objectClass = "";
+					
+					if (objectClassCode.equals( "0" ))
+						objectClass = "single_cell";
+					else if (objectClassCode.equals( "1" ))
+						objectClass = "mating";
+					else if (objectClassCode.equals( "2" ))
+						objectClass = "budding";
+					else if (objectClassCode.equals( "1.1" ))
+						objectClass = "mating_mother";
+					else if (objectClassCode.equals( "1.2" ))
+						objectClass = "mating_daughter";
+					else if (objectClassCode.equals( "2.1" ))
+						objectClass = "budding_mother";
+					else if (objectClassCode.equals( "2.2" ))
+						objectClass = "budding_daughter";
+
 					if (addBoxes == true) {
 						Roi boxroi = new Roi(x,y,w,h);
+						boxroi.setName( key + ": " + objectClass);
 						boxroi.setPosition(image);
 						manager.addRoi(boxroi);
 					}
-
-					if (addMasks == true) {
-						String maskString = thing.getString("mask");
-						BufferedImage mask = base64toBufferedImg(maskString);
-						ImagePlus maskImg = new ImagePlus("Temporary mask", mask);
-
-						ImageProcessor ip = maskImg.getProcessor();
-						ip.setThreshold(25, 255, ImageProcessor.NO_LUT_UPDATE);
-
-						ThresholdToSelection tts = new ThresholdToSelection();
-						Roi maskroi = tts.run(maskImg);
-
-						maskroi.setPosition(image);
-						maskroi.setLocation(x,y);
-
-						manager.addRoi(maskroi);
-
-						RandomAccess< ShortType > cur = masks.randomAccess();
-						Cursor< UnsignedByteType > itMaskI = ImageJFunctions.wrapByte( maskImg ).localizingCursor();
-						while (itMaskI.hasNext())
-						{
-							itMaskI.fwd();
-							cur.setPosition( itMaskI );
-							cur.get().setReal( itMaskI.get().get() / 255 * i );
-						}
-						maskImg.close();
-					}
 				}
+				
 			}
+			
 			if (showSegmentation)
-				ImageJFunctions.show( masks, "segmentation of " + image.getTitle() );
+			{
+				// set objects under threshold to zero
+				ImageJFunctions.wrapReal( mask ).forEach( v -> {
+					if (!objectsOverThreshold.contains( (int)(v.getRealFloat())))
+						v.setZero();
+				});
+
+				if (lutService.findLUTs().containsKey( LABEL_LUT_NAME ))
+				{
+					ColorTable lutColorTable = lutService.loadLUT( lutService.findLUTs().get( LABEL_LUT_NAME ) );
+
+					byte[] reds = new byte[256];
+					byte[] greens = new byte[256];
+					byte[] blues = new byte[256];
+					for (int i = 0; i< 256; i++)
+					{
+						reds[i] = (byte) lutColorTable.getResampled( 0, 256, i );
+						greens[i] = (byte) lutColorTable.getResampled( 1, 256, i );
+						blues[i] = (byte) lutColorTable.getResampled( 2, 256, i );
+					}
+
+					LUT lut = new LUT(reds, greens, blues);
+					mask.setLut( lut );
+				}
+				
+				
+				mask.show();
+
+			}
+			
+			
+			
+//			for (int i = 0; i < result.getJSONArray("things").length(); i++) {
+//				JSONObject thing = result.getJSONArray("things").getJSONObject(i);
+//				
+//				result.getJSONObject( "things" );
+//
+//				double score = thing.getDouble("score");
+//
+//				if (score > scoreThreshold) {
+//					JSONArray box = thing.getJSONArray("box");
+//
+//					int x = box.getInt(0);
+//					int y = box.getInt(1);
+//					int w = box.getInt(2) - box.getInt(0);
+//					int h = box.getInt(3) - box.getInt(1);
+//
+//					if (addBoxes == true) {
+//						Roi boxroi = new Roi(x,y,w,h);
+//						boxroi.setPosition(image);
+//						manager.addRoi(boxroi);
+//					}
+//
+//					if (addMasks == true) {
+//						String maskString = thing.getString("mask");
+//						BufferedImage maskI = base64toBufferedImg(maskString);
+//						ImagePlus maskImg = new ImagePlus("Temporary mask", maskI);
+//
+//						ImageProcessor ip = maskImg.getProcessor();
+//						ip.setThreshold(25, 255, ImageProcessor.NO_LUT_UPDATE);
+//
+//						ThresholdToSelection tts = new ThresholdToSelection();
+//						Roi maskroi = tts.run(maskImg);
+//
+//						maskroi.setPosition(image);
+//						maskroi.setLocation(x,y);
+//
+//						manager.addRoi(maskroi);
+//
+//						RandomAccess< ShortType > cur = masks.randomAccess();
+//						Cursor< UnsignedByteType > itMaskI = ImageJFunctions.wrapByte( maskImg ).localizingCursor();
+//						while (itMaskI.hasNext())
+//						{
+//							itMaskI.fwd();
+//							cur.setPosition( itMaskI );
+//							cur.get().setReal( itMaskI.get().get() / 255 * i );
+//						}
+//						maskImg.close();
+//					}
+//				}
+//			}
 
 		}
 		catch(IOException a) {
@@ -215,6 +396,11 @@ public class YeastMate implements Command, Previewable {
 		catch(JSONException c) {
 			log.info(c);
 		}
+//		finally {
+//			// set display range to old min and max
+//			image.setDisplayRange( oldMin, oldMax );
+//			image.updateAndDraw();
+//		}
 	}
 
 	@Override
