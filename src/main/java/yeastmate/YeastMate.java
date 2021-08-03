@@ -259,9 +259,9 @@ public class YeastMate implements Command, Previewable {
 			for (final String key : thingsJSON.keySet())
 			{
 				JSONObject thing = thingsJSON.getJSONObject( key );
-				double score = thing.getDouble("score");
-				
-				if (score > scoreThreshold) {
+				JSONArray classes = thing.getJSONArray("class");
+				for (int i=0; i<classes.length(); i++)
+				{
 
 					objectsOverThreshold.add( Integer.parseInt( key ) );
 
@@ -272,7 +272,7 @@ public class YeastMate implements Command, Previewable {
 					int w = box.getInt(2) - box.getInt(0);
 					int h = box.getInt(3) - box.getInt(1);
 
-					String objectClassCode = (thing.getString( "class" ));
+					String objectClassCode = classes.getString(i);
 					String objectClass = "";
 
 					// TODO: extract
@@ -293,12 +293,13 @@ public class YeastMate implements Command, Previewable {
 
 					if (addBoxes == true) {
 						Roi boxroi = new Roi(x,y,w,h);
+						// TODO: add name of parent here?
 						boxroi.setName( key + ": " + objectClass);
 						boxroi.setPosition(image);
 						manager.addRoi(boxroi);
 					}
 				}
-				
+
 			}
 			
 			if (showSegmentation)
