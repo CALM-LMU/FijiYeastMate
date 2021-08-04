@@ -1,103 +1,53 @@
 package yeastmate;
 
-import java.awt.image.BufferedImage;
-import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.FileWriter;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.io.PrintWriter;
-import java.io.StringWriter;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.nio.charset.Charset;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.Arrays;
 import java.util.Base64;
-import java.util.HashSet;
 import java.util.Iterator;
-import java.util.Map;
 import java.util.stream.StreamSupport;
 
-import javax.imageio.ImageIO;
-
 import org.apache.commons.math3.stat.descriptive.rank.Percentile;
-import org.apache.http.HttpEntity;
-import org.apache.http.ProtocolVersion;
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpPost;
-import org.apache.http.client.methods.RequestBuilder;
 import org.apache.http.entity.ContentType;
-import org.apache.http.entity.mime.HttpMultipartMode;
 import org.apache.http.entity.mime.MultipartEntityBuilder;
-import org.apache.http.entity.mime.content.ByteArrayBody;
-import org.apache.http.entity.mime.content.FileBody;
 import org.apache.http.impl.client.HttpClients;
-import org.apache.http.protocol.HttpRequestExecutor;
+import org.apache.http.util.EntityUtils;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
-import org.json.JSONTokener;
-import org.json.JSONWriter;
 import org.scijava.app.StatusService;
 import org.scijava.command.Command;
 import org.scijava.command.Previewable;
-import org.scijava.io.IOService;
 import org.scijava.log.LogService;
 import org.scijava.plugin.Parameter;
 import org.scijava.plugin.Plugin;
 
-import ij.IJ;
 import ij.ImagePlus;
 import ij.gui.Roi;
 import ij.io.FileInfo;
 import ij.io.Opener;
 import ij.io.TiffEncoder;
-import ij.plugin.BMP_Writer;
-import ij.plugin.LutLoader;
-import ij.plugin.filter.ThresholdToSelection;
 import ij.plugin.frame.RoiManager;
-import ij.process.ImageProcessor;
 import ij.process.LUT;
-import io.scif.formats.tiff.TiffSaver;
-import io.scif.media.imageioimpl.plugins.tiff.TIFFImageWriter;
-import io.scif.services.JAIIIOService;
-import io.scif.services.JAIIIOServiceImpl;
 import net.imagej.ImageJ;
-import net.imagej.lut.LUTFinder;
 import net.imagej.lut.LUTService;
 import net.imglib2.Cursor;
 import net.imglib2.RandomAccess;
 import net.imglib2.RandomAccessibleInterval;
-import net.imglib2.algorithm.stats.Normalize;
-import net.imglib2.converter.Converters;
-import net.imglib2.converter.RealFloatConverter;
 import net.imglib2.display.ColorTable;
-import net.imglib2.img.Img;
-import net.imglib2.img.array.ArrayImg;
 import net.imglib2.img.array.ArrayImgs;
-import net.imglib2.img.array.ArrayLocalizingCursor;
-import net.imglib2.img.basictypeaccess.array.ShortArray;
 import net.imglib2.img.display.imagej.ImageJFunctions;
 import net.imglib2.type.numeric.RealType;
-import net.imglib2.type.numeric.integer.ShortType;
-import net.imglib2.type.numeric.integer.UnsignedByteType;
 import net.imglib2.type.numeric.real.FloatType;
-import net.imglib2.util.Util;
 import net.imglib2.view.Views;
 
 @Plugin(type = Command.class, headless = true,
 	menuPath = "Plugins>YeastMate")
 public class YeastMate implements Command, Previewable {
 	private static final String LABEL_LUT_NAME = "Fire.lut";
-
-	private String tmpIpAdress = "*:5000";
 
 	@Parameter
 	private LogService log;
@@ -106,44 +56,45 @@ public class YeastMate implements Command, Previewable {
 	private StatusService statusService;
 	
 	@Parameter
-	private IOService ioService;
-	
-	@Parameter
 	private LUTService lutService;
-
-	@Parameter(label = "Local or remote detection", choices = { "Local detection", "Remote detection" }, callback="localChanged")
-	private String localChoice;
-
-	@Parameter(label = "IP adress of remote detection server")
-	private String ipAdress = "127.0.0.1:5000";
-
-	@Parameter(label = "Add bounding boxes to ROI Manager?")
-	private Boolean addBoxes = true; 
-
-	@Parameter(label = "Add masks to ROI Manager?")
-	private Boolean addMasks = true;
-
-	@Parameter(label = "Show segmentation mask?")
-	private Boolean showSegmentation = true;
-
-	@Parameter(label = "Detection score threshold to add objects", style = "slider", min = "0", max = "1", stepSize = "0.1")
-	private Double scoreThreshold = 0.5;
-
-	@Parameter(label = "Minimum Intensity Quantile for Normalization", style = "slider", min = "0.001", max = "1", stepSize = "0.001")
-	private Double minNormalizationQualtile = 0.01;
-
-	@Parameter(label = "Maximum Intensity Quantile for Normalization", style = "slider", min = "0", max = "1", stepSize = "0.001")
-	private Double maxNormalizationQualtile = 0.995;
 
 	@Parameter
 	private ImagePlus image;
 
-	private static final String IMAGE_REQUEST_TYPE = "image/tiff";
+	@Parameter(label = "Detection score threshold (single cells)", style = "slider", min = "0", max = "1", stepSize = "0.01")
+	private Double scoreThresholdSingle = 0.9;
+
+	@Parameter(label = "Detection score threshold (matings)", style = "slider", min = "0", max = "1", stepSize = "0.01")
+	private Double scoreThresholdMating = 0.5;
+
+	@Parameter(label = "Detection score threshold (buddings)", style = "slider", min = "0", max = "1", stepSize = "0.01")
+	private Double scoreThresholdBudding = 0.5;
+
+	@Parameter(label = "Minimum Intensity Quantile for Normalization", style = "slider", min = "0.005", max = "1", stepSize = "0.005")
+	private Double minNormalizationQualtile = 0.01;
+
+	@Parameter(label = "Maximum Intensity Quantile for Normalization", style = "slider", min = "0.005", max = "1", stepSize = "0.005")
+	private Double maxNormalizationQualtile = 0.995;
+
+	@Parameter(label = "Add single cell bounding boxes to ROI Manager?")
+	private Boolean addSingleBoxes = false;
+
+	@Parameter(label = "Add mating bounding boxes to ROI Manager?")
+	private Boolean addMatingBoxes = true;
+
+	@Parameter(label = "Add budding bounding boxes to ROI Manager?")
+	private Boolean addBuddingBoxes = false;
+
+	@Parameter(label = "Show segmentation mask?")
+	private Boolean showSegmentation = true;
+
+	@Parameter(label = "IP adress of detection server", style = "server-status")
+	private String ipAdress = "127.0.0.1:5000";
 
 	@Override
 	public void run() {
 
-		// RGB would require different quantile calc -> we do not support it atm.
+		// RGB would require different quantile calc -> we do not support it a.t.m.
 		if ( image.getFileInfo().fileType == FileInfo.RGB )
 		{
 			log.log( 0, "RGB images not supported, please convert your image to grayscale." );
@@ -153,21 +104,21 @@ public class YeastMate implements Command, Previewable {
 		detect();
 	}
 
-	private BufferedImage base64toBufferedImg(String b64img) {
-		BufferedImage image = null;
-		byte[] imageByte;
-
-		try {
-			imageByte = Base64.getDecoder().decode(b64img);
-			ByteArrayInputStream bis = new ByteArrayInputStream(imageByte);
-			image = ImageIO.read(bis);
-		}
-		catch (IOException e) {
-			log.info(e);
-		}
-
-		return image;
-	}
+//	private BufferedImage base64toBufferedImg(String b64img) {
+//		BufferedImage image = null;
+//		byte[] imageByte;
+//
+//		try {
+//			imageByte = Base64.getDecoder().decode(b64img);
+//			ByteArrayInputStream bis = new ByteArrayInputStream(imageByte);
+//			image = ImageIO.read(bis);
+//		}
+//		catch (IOException e) {
+//			log.info(e);
+//		}
+//
+//		return image;
+//	}
 
 	public <T extends RealType<T>> void detect() {
 
@@ -208,9 +159,8 @@ public class YeastMate implements Command, Previewable {
 			ByteArrayOutputStream jsonBytes = new ByteArrayOutputStream();
 
 			// write parameters as JSON bytes
-			// TODO: set actual parameters here
 			PrintWriter pw = new PrintWriter(jsonBytes);
-			pw.write("{\"0\":0.9,\"1\":0.5,\"2\":0.5}");
+			pw.write("{\"0\":"+scoreThresholdSingle+",\"1\":" +scoreThresholdMating+",\"2\":"+scoreThresholdBudding+"}");
 			pw.close();
 
 			// write normalized image as tiff to bytes
@@ -228,13 +178,13 @@ public class YeastMate implements Command, Previewable {
 
 			// get response as JSON
 			CloseableHttpResponse response = HttpClients.createDefault().execute(conn);
-			JSONTokener tokener = new JSONTokener(response.getEntity().getContent());
-			JSONObject result = new JSONObject(tokener);
+//			JSONTokener tokener = new JSONTokener(response.getEntity().getContent());
+			JSONObject result = new JSONObject(EntityUtils.toString( response.getEntity() ));
 
 			response.close();
 
 			RoiManager manager = RoiManager.getInstance();
-			if (manager == null){
+			if (manager == null && (addSingleBoxes || addMatingBoxes || addBuddingBoxes )){
 				manager = new RoiManager();
 			}
 
@@ -255,15 +205,17 @@ public class YeastMate implements Command, Previewable {
 
 			final JSONObject thingsJSON = result.getJSONObject( "things" );
 
-			final HashSet< Integer > objectsOverThreshold = new HashSet<>();
-			for (final String key : thingsJSON.keySet())
+//			final HashSet< Integer > objectsOverThreshold = new HashSet<>();
+			Iterator<String> keysIt = thingsJSON.keys();
+			while (keysIt.hasNext())
 			{
+				String key = keysIt.next();
 				JSONObject thing = thingsJSON.getJSONObject( key );
 				JSONArray classes = thing.getJSONArray("class");
 				for (int i=0; i<classes.length(); i++)
 				{
 
-					objectsOverThreshold.add( Integer.parseInt( key ) );
+//					objectsOverThreshold.add( Integer.parseInt( key ) );
 
 					JSONArray box = thing.getJSONArray("box");
 
@@ -291,7 +243,7 @@ public class YeastMate implements Command, Previewable {
 					else if (objectClassCode.equals( "2.2" ))
 						objectClass = "budding_daughter";
 
-					if (addBoxes == true) {
+					if ((addSingleBoxes && objectClassCode.startsWith("0")) || (addMatingBoxes && objectClassCode.startsWith("1")) || (addBuddingBoxes && objectClassCode.startsWith("2"))) {
 						Roi boxroi = new Roi(x,y,w,h);
 						// TODO: add name of parent here?
 						boxroi.setName( key + ": " + objectClass);
@@ -305,10 +257,10 @@ public class YeastMate implements Command, Previewable {
 			if (showSegmentation)
 			{
 				// set objects under threshold to zero
-				ImageJFunctions.wrapReal( mask ).forEach( v -> {
-					if (!objectsOverThreshold.contains( (int)(v.getRealFloat())))
-						v.setZero();
-				});
+//				ImageJFunctions.wrapReal( mask ).forEach( v -> {
+//					if (!objectsOverThreshold.contains( (int)(v.getRealFloat())))
+//						v.setZero();
+//				});
 
 				// TODO: extract
 				if (lutService.findLUTs().containsKey( LABEL_LUT_NAME ))
@@ -405,15 +357,17 @@ public class YeastMate implements Command, Previewable {
 		log.info("YeastMate: canceled");
 	}
 
-	protected void localChanged() {
-		if (localChoice.equals("Local detection")) {
-			tmpIpAdress = ipAdress;
-			ipAdress = "127.0.0.1:5000";
-		}
-		else {
-			ipAdress = tmpIpAdress;
-		}
-	}
+
+
+//	protected void localChanged() {
+//		if (localChoice.equals("Local detection")) {
+//			tmpIpAdress = ipAdress;
+//			ipAdress = "127.0.0.1:5000";
+//		}
+//		else {
+//			ipAdress = tmpIpAdress;
+//		}
+//	}
 
 	public static void main(final String... args) throws Exception {
 		final ImageJ ij = new ImageJ();
