@@ -5,6 +5,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintWriter;
 import java.util.Base64;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.stream.StreamSupport;
 
@@ -87,6 +88,9 @@ public class YeastMate implements Command, Previewable {
 
 	@Parameter(label = "Show segmentation mask?")
 	private Boolean showSegmentation = true;
+
+	@Parameter(label = "Only include cells from selected classes in mask?")
+	private Boolean onlySelectedClassesInMask = false;
 
 	@Parameter(label = "IP adress of detection server", style = "server-status")
 	private String ipAdress = "127.0.0.1:5000";
@@ -203,9 +207,9 @@ public class YeastMate implements Command, Previewable {
 						);
 			}
 
-			final JSONObject thingsJSON = result.getJSONObject( "things" );
+			final JSONObject thingsJSON = result.getJSONObject( "detections" );
 
-//			final HashSet< Integer > objectsOverThreshold = new HashSet<>();
+			final HashSet< Integer > cellsOfSelectedClasses = new HashSet<>();
 			Iterator<String> keysIt = thingsJSON.keys();
 			while (keysIt.hasNext())
 			{
@@ -245,6 +249,8 @@ public class YeastMate implements Command, Previewable {
 
 					if ((addSingleBoxes && objectClassCode.startsWith("0")) || (addMatingBoxes && objectClassCode.startsWith("1")) || (addBuddingBoxes && objectClassCode.startsWith("2"))) {
 						Roi boxroi = new Roi(x,y,w,h);
+
+						cellsOfSelectedClasses.add( Integer.parseInt( key ) );
 						// TODO: add name of parent here?
 						boxroi.setName( key + ": " + objectClass);
 						boxroi.setPosition(image);
@@ -257,10 +263,11 @@ public class YeastMate implements Command, Previewable {
 			if (showSegmentation)
 			{
 				// set objects under threshold to zero
-//				ImageJFunctions.wrapReal( mask ).forEach( v -> {
-//					if (!objectsOverThreshold.contains( (int)(v.getRealFloat())))
-//						v.setZero();
-//				});
+				if (onlySelectedClassesInMask)
+					ImageJFunctions.wrapReal( mask ).forEach( v -> {
+						if (!cellsOfSelectedClasses.contains( (int)(v.getRealFloat())))
+							v.setZero();
+					});
 
 				// TODO: extract
 				if (lutService.findLUTs().containsKey( LABEL_LUT_NAME ))
