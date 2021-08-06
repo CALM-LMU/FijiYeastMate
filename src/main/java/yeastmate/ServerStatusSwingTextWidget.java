@@ -54,7 +54,7 @@ public class ServerStatusSwingTextWidget extends SwingTextWidget
 		// if no connection can be made, set server status accordingly
 		CloseableHttpResponse response = null;
 		try { response = client.execute(new HttpGet( "http://" + getValue() + "/healthz" ));}
-		catch (IOException e)
+		catch (IOException | IllegalArgumentException e)
 		{
 			statusLabel.setText( "Server status: ERROR" );
 			return;
