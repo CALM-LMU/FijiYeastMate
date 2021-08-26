@@ -50,18 +50,17 @@ public class ServerStatusSwingTextWidget extends SwingTextWidget
 				.setConnectionRequestTimeout( TIMEOUT_MS ).build();
 		CloseableHttpClient client = HttpClientBuilder.create().setDefaultRequestConfig( config ).build();
 
-		// 1) GET /healthy endpoint at specified IP
-		// if no connection can be made, set server status accordingly
-		CloseableHttpResponse response = null;
-		try { response = client.execute(new HttpGet( "http://" + getValue() + "/healthz" ));}
-		catch (IOException | IllegalArgumentException e)
-		{
-			statusLabel.setText( "Server status: ERROR" );
-			return;
+		// 1) GET /healthz endpoint at specified IP
+		try ( CloseableHttpResponse response = client.execute(new HttpGet( "http://" + getValue() + "/healthz" )) ){
+			// 2) check that the response code is 200: OK
+			if (response.getStatusLine().getStatusCode() != HttpStatus.SC_OK)
+			{
+				statusLabel.setText( "Server status: ERROR" );
+				return;
+			}
 		}
-
-		// 2) check that the response code is 200: OK
-		if (response.getStatusLine().getStatusCode() != HttpStatus.SC_OK)
+		// if no connection can be made, set server status accordingly
+		catch (IOException | IllegalArgumentException e)
 		{
 			statusLabel.setText( "Server status: ERROR" );
 			return;
