@@ -210,10 +210,10 @@ public class YeastMate implements Command, Previewable {
 			final JSONObject thingsJSON = result.getJSONObject( "detections" );
 
 			final HashSet< Integer > cellsOfSelectedClasses = new HashSet<>();
-			Iterator<String> keysIt = thingsJSON.keys();
+			Iterator<?> keysIt = thingsJSON.keys();
 			while (keysIt.hasNext())
 			{
-				String key = keysIt.next();
+				String key = (String) keysIt.next();
 				JSONObject thing = thingsJSON.getJSONObject( key );
 				JSONArray classes = thing.getJSONArray("class");
 				for (int i=0; i<classes.length(); i++)
