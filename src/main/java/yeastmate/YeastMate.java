@@ -120,6 +120,8 @@ public class YeastMate implements Command, Previewable {
 
 	public <T extends RealType<T>> void detect() {
 
+		statusService.showStatus( 0, 3, "Preparing Request to Backend" );
+
 		// get only currently displayed image as imglib2 RAI
 		RandomAccessibleInterval<T> img = ImageJFunctions.wrapReal( image );
 		if (image.getNChannels() > 1)
@@ -176,6 +178,9 @@ public class YeastMate implements Command, Previewable {
 
 			// get response as JSON
 			CloseableHttpResponse response = HttpClients.createDefault().execute(conn);
+
+			statusService.showStatus( 1, 3, "Getting Results from Backend" );
+
 			JSONObject result = new JSONObject(EntityUtils.toString( response.getEntity() ));
 
 			response.close();
@@ -184,6 +189,8 @@ public class YeastMate implements Command, Previewable {
 			if (manager == null && (addSingleRois || addMatingRois || addBuddingRois )){
 				manager = new RoiManager();
 			}
+
+			statusService.showStatus( 2, 3, "Parsing Results" );
 
 			// mask is returned as base64-encoded 16-bit TIFF
 			ImagePlus mask = new Opener().openTiff( 
@@ -314,6 +321,8 @@ public class YeastMate implements Command, Previewable {
 		catch(JSONException c) {
 			log.info(c);
 		}
+
+		statusService.showStatus( 3, 3, "YeastMate: Done" );
 	}
 
 	@Override
