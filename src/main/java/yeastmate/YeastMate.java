@@ -176,10 +176,10 @@ public class YeastMate implements Command, Previewable {
 			HttpPost conn = new HttpPost("http://" + ipAdress + "/predict");
 			conn.setEntity(multipartBuilder.build());
 
+			statusService.showStatus( 1, 3, "Getting Results from Backend" );
+
 			// get response as JSON
 			CloseableHttpResponse response = HttpClients.createDefault().execute(conn);
-
-			statusService.showStatus( 1, 3, "Getting Results from Backend" );
 
 			JSONObject result = new JSONObject(EntityUtils.toString( response.getEntity() ));
 
@@ -271,7 +271,7 @@ public class YeastMate implements Command, Previewable {
 						// we have subobject of lifecycle transition -> add parent id in ROI name
 						if (objectClassCode.length() > 1)
 						{
-							roiName += ", " + (objectClassCode.charAt( i ) == '1' ? "mating " : "budding ") + thing.getJSONArray("links").getInt( i-1 );
+							roiName += ", " + (objectClassCode.charAt( 0 ) == '1' ? "mating " : "budding ") + thing.getJSONArray("links").getInt( i-1 );
 						}
 
 						cellsOfSelectedClasses.add( Integer.parseInt( key ) );
