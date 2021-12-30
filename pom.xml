@@ -108,5 +108,10 @@
 			<artifactId>httpmime</artifactId>
 			<version>4.5.13</version>
 		</dependency>
+		<dependency>
+			<groupId>hoerlteam</groupId>
+			<artifactId>labeltools</artifactId>
+			<version>0.0.1-SNAPSHOT</version>
+		</dependency>
 	</dependencies>
 </project>
