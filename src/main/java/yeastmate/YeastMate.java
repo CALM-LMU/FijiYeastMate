@@ -34,8 +34,6 @@ import org.scijava.log.LogService;
 import org.scijava.plugin.Parameter;
 import org.scijava.plugin.Plugin;
 
-import hoerlteam.labeltools.JonkerVolgenantMatching;
-import hoerlteam.labeltools.LabelTools;
 import ij.ImagePlus;
 import ij.ImageStack;
 import ij.gui.PolygonRoi;
