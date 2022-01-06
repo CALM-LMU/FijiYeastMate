@@ -131,6 +131,11 @@ public class YeastMate implements Command, Previewable {
 			return;
 		}
 
+		if (processEveryFrame && image.getNFrames() == 1)
+		{
+			log.warn("Timeseries detection was selected but input does not have multiple frames. Will only process currently selected image.");
+		}
+
 		detect();
 	}
 
@@ -537,6 +542,18 @@ public class YeastMate implements Command, Previewable {
 				matchBoxesBudding.forEach((labelNew, labelOld) -> {
 					compoundLabelRemap.put(labelNew, last.allLabelRemap.get(labelOld));
 				});
+
+				// to prevent jumps in labels, we relabel from start value once more for objects that were not matched
+				final AtomicInteger idx2 = new AtomicInteger(startValue);
+				singleLabelRemap.forEach((label, remappedLabel) -> {
+					if (!matchedLabels.containsKey(label))
+						singleLabelRemap.put(label, idx2.incrementAndGet());
+				});
+				compoundLabelRemap.forEach((label, remappedLabel) -> {
+					if (!(matchBoxesMating.containsKey(label) || matchBoxesBudding.containsKey(label)))
+						compoundLabelRemap.put(label, idx2.incrementAndGet());
+				});
+
 			}
 
 			// map of all (single and compound) re-mapped labels
