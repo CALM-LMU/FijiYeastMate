@@ -111,8 +111,8 @@ public class YeastMate implements Command, Previewable {
 	@Parameter(label = "Process every frame in timeseries?")
 	private Boolean processEveryFrame = false;
 	
-	@Parameter(label = "Minimum Overlap for tracking in timeseries", style = "slider", min = "0.000", max = "1", stepSize = "0.005")
-	private Double minTrackingOverlap = 0.5;
+	@Parameter(label = "Minimum Overlap for tracking in timeseries", style = "slider", min = "0.005", max = "1", stepSize = "0.005")
+	private Double minTrackingOverlap = 0.25;
 
 	// add ROIs as outlines or boxes?
 	private static Boolean addOutlineRois = true;
